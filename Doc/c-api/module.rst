@@ -451,8 +451,8 @@ state:
 
    On success, return ``0``. On error, raise an exception and return ``-1``.
 
-   Return ``NULL`` if *value* is ``NULL``. It must be called with an exception
-   raised in this case.
+   Return ``-1`` if *value* is ``NULL``. In this case, it must be called with
+   an exception raised; if not, :exc:`SystemError` is raised.
 
    Example usage::
 
