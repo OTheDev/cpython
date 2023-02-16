@@ -452,7 +452,7 @@ state:
    On success, return ``0``. On error, raise an exception and return ``-1``.
 
    Return ``-1`` if *value* is ``NULL``. In this case, it must be called with
-   an exception raised; if not, :exc:`SystemError` is raised.
+   an exception raised.
 
    Example usage::
 
