@@ -5575,25 +5575,152 @@ _PyLong_Lshift(PyObject *a, int64_t shiftby)
     return long_lshift_int64(_PyLong_CAST(a), shiftby);
 }
 
-
-/* Compute two's complement of digit vector a[0:m], writing result to
-   z[0:m].  The digit vector a need not be normalized, but should not
-   be entirely zero.  a and z may point to the same digit vector. */
-
-static void
-v_complement(digit *z, digit *a, Py_ssize_t m)
-{
-    Py_ssize_t i;
-    digit carry = 1;
-    for (i = 0; i < m; ++i) {
-        carry += a[i] ^ PyLong_MASK;
-        z[i] = carry & PyLong_MASK;
-        carry >>= PyLong_SHIFT;
-    }
-    assert(carry == 0);
-}
-
 /* Bitwise and/xor/or operations */
+
+#define BITWISE_OP_SIZE_GTE_V2(binop, a, b, z, size_a, size_b, nega, negb, carry_z) do { \
+    Py_ssize_t i; \
+    if (!nega && !negb) { \
+        for (i = 0; i < size_b; ++i) { \
+            z->long_value.ob_digit[i] = a->long_value.ob_digit[i] binop b->long_value.ob_digit[i]; \
+        } \
+        for (; i < size_z; ++i) { \
+            z->long_value.ob_digit[i] = a->long_value.ob_digit[i] binop 0; \
+        } \
+    } else if (!nega && negb) { \
+        digit carry_b = 1; \
+        if (!negz) { \
+            for (i = 0; i < size_b; ++i) { \
+                carry_b += b->long_value.ob_digit[i] ^ PyLong_MASK; \
+                z->long_value.ob_digit[i] = (a->long_value.ob_digit[i] binop carry_b) & PyLong_MASK; \
+                carry_b >>= PyLong_SHIFT; \
+            } \
+            for (; i < size_z; ++i) { \
+                z->long_value.ob_digit[i] = a->long_value.ob_digit[i] binop PyLong_MASK; \
+            } \
+        } else { \
+            for (i = 0; i < size_b; ++i) { \
+                carry_b += b->long_value.ob_digit[i] ^ PyLong_MASK; \
+                carry_z += ((a->long_value.ob_digit[i] binop carry_b) ^ PyLong_MASK) & PyLong_MASK; \
+                z->long_value.ob_digit[i] = carry_z & PyLong_MASK; \
+                carry_b >>= PyLong_SHIFT; \
+                carry_z >>= PyLong_SHIFT; \
+            } \
+            for (; i < size_z; ++i) { \
+                carry_z += ((a->long_value.ob_digit[i] binop PyLong_MASK) ^ PyLong_MASK) & PyLong_MASK; \
+                z->long_value.ob_digit[i] = carry_z & PyLong_MASK; \
+                carry_z >>= PyLong_SHIFT; \
+            } \
+        } \
+    } else if (nega && !negb) { \
+        digit carry_a = 1; \
+        if (!negz) { \
+            for (i = 0; i < size_b; ++i) { \
+                carry_a += a->long_value.ob_digit[i] ^ PyLong_MASK; \
+                z->long_value.ob_digit[i] = (carry_a binop b->long_value.ob_digit[i]) & PyLong_MASK; \
+                carry_a >>= PyLong_SHIFT; \
+            } \
+            for (; i < size_z; ++i) { \
+                carry_a += a->long_value.ob_digit[i] ^ PyLong_MASK; \
+                z->long_value.ob_digit[i] = (carry_a binop 0) & PyLong_MASK; \
+                carry_a >>= PyLong_SHIFT; \
+            } \
+        } else { \
+            for (i = 0; i < size_b; ++i) { \
+                carry_a += a->long_value.ob_digit[i] ^ PyLong_MASK; \
+                carry_z += ((carry_a binop b->long_value.ob_digit[i]) ^ PyLong_MASK) & PyLong_MASK; \
+                z->long_value.ob_digit[i] = carry_z & PyLong_MASK; \
+                carry_a >>= PyLong_SHIFT; \
+                carry_z >>= PyLong_SHIFT; \
+            } \
+            for (; i < size_z; ++i) { \
+                carry_a += a->long_value.ob_digit[i] ^ PyLong_MASK; \
+                carry_z += ((carry_a binop 0) ^ PyLong_MASK) & PyLong_MASK; \
+                z->long_value.ob_digit[i] = carry_z & PyLong_MASK; \
+                carry_a >>= PyLong_SHIFT; \
+                carry_z >>= PyLong_SHIFT; \
+            } \
+        } \
+    } else { \
+        digit carry_a = 1, carry_b = 1; \
+        if (!negz) { \
+            for (i = 0; i < size_b; ++i) { \
+                carry_a += a->long_value.ob_digit[i] ^ PyLong_MASK; \
+                carry_b += b->long_value.ob_digit[i] ^ PyLong_MASK; \
+                z->long_value.ob_digit[i] = (carry_a binop carry_b) & PyLong_MASK; \
+                carry_a >>= PyLong_SHIFT; \
+                carry_b >>= PyLong_SHIFT; \
+            } \
+            for (; i < size_z; ++i) { \
+                carry_a += a->long_value.ob_digit[i] ^ PyLong_MASK; \
+                z->long_value.ob_digit[i] = (carry_a binop PyLong_MASK) & PyLong_MASK; \
+                carry_a >>= PyLong_SHIFT; \
+            } \
+        } else { \
+            for (i = 0; i < size_b; ++i) { \
+                carry_a += a->long_value.ob_digit[i] ^ PyLong_MASK; \
+                carry_b += b->long_value.ob_digit[i] ^ PyLong_MASK; \
+                carry_z += ((carry_a binop carry_b) ^ PyLong_MASK) & PyLong_MASK; \
+                z->long_value.ob_digit[i] = carry_z & PyLong_MASK; \
+                carry_a >>= PyLong_SHIFT; \
+                carry_b >>= PyLong_SHIFT; \
+                carry_z >>= PyLong_SHIFT; \
+            } \
+            for (; i < size_z; ++i) { \
+                carry_a += a->long_value.ob_digit[i] ^ PyLong_MASK; \
+                carry_z += ((carry_a binop PyLong_MASK) ^ PyLong_MASK) & PyLong_MASK; \
+                z->long_value.ob_digit[i] = carry_z & PyLong_MASK; \
+                carry_a >>= PyLong_SHIFT; \
+                carry_z >>= PyLong_SHIFT; \
+            } \
+        } \
+    } \
+} while(0)
+
+/* Helper for long_bitwise() */
+#define BITWISE_OP_SIZE_GTE(binop, z, x, y, size_z, size_x, size_y, negz, negx, negy) do { \
+    assert(size_z >= size_x && size_x >= size_y); \
+    assert(negz ? (_PyLong_DigitCount(z) == size_x + 1) : (_PyLong_DigitCount(z) == size_x)); \
+    \
+    /* If nonnegative, XOR with mask 00...0 and add 0 (i.e. do nothing because signed magnitude bits \
+     * are already in two's complement representation).  If negative, XOR with mask 11...1 (flip bits) \
+     * and add 1.  We simulate computing two's complement "on-the-fly", without allocating memory. \
+     * We do the same for the result `z`, in order to convert back to its signed magnitude representation \
+     * when the result of the bitwise operation should be negative).  The masks also function as the \
+     * infinite sequence of sign bits (11... when negative, 00... when nonnegative), which yields the two's \
+     * complement digit value for `y` in the second loop. */ \
+    const digit x_mask = negx ? PyLong_MASK : 0; \
+    const digit y_mask = negy ? PyLong_MASK : 0; \
+    const digit z_mask = negz ? PyLong_MASK : 0; \
+    digit x_carry = negx; \
+    digit y_carry = negy; \
+    digit z_carry = negz; \
+    Py_ssize_t i; \
+    for (i = 0; i < size_b; ++i) { \
+        x_carry += x->long_value.ob_digit[i] ^ x_mask; \
+        y_carry += y->long_value.ob_digit[i] ^ y_mask; \
+        z_carry += ((x_carry binop y_carry) & PyLong_MASK) ^ z_mask; \
+        z->long_value.ob_digit[i] = z_carry & PyLong_MASK; \
+        x_carry >>= PyLong_SHIFT; \
+        y_carry >>= PyLong_SHIFT; \
+        z_carry >>= PyLong_SHIFT; \
+    } \
+    assert(y_carry == 0); \
+    \
+    for (; i < size_z; ++i) { \
+        /* With sign extension, y's digit is y_mask */ \
+        x_carry += x->long_value.ob_digit[i] ^ x_mask; \
+        z_carry += ((x_carry binop y_mask) & PyLong_MASK) ^ z_mask; \
+        z->long_value.ob_digit[i] = z_carry & PyLong_MASK; \
+        x_carry >>= PyLong_SHIFT; \
+        z_carry >>= PyLong_SHIFT; \
+    } \
+    assert(x_carry == 0); \
+    \
+    if (negz) { \
+        z->long_value.ob_digit[size_z] = z_carry; \
+        _PyLong_FlipSign(z); \
+    } \
+} while(0)
 
 static PyObject *
 long_bitwise(PyLongObject *a,
@@ -5601,42 +5728,13 @@ long_bitwise(PyLongObject *a,
              PyLongObject *b)
 {
     int nega, negb, negz;
-    Py_ssize_t size_a, size_b, size_z, i;
+    Py_ssize_t size_a, size_b, size_z;
     PyLongObject *z;
 
-    /* Bitwise operations for negative numbers operate as though
-       on a two's complement representation.  So convert arguments
-       from sign-magnitude to two's complement, and convert the
-       result back to sign-magnitude at the end. */
-
-    /* If a is negative, replace it by its two's complement. */
     size_a = _PyLong_DigitCount(a);
-    nega = _PyLong_IsNegative(a);
-    if (nega) {
-        z = long_alloc(size_a);
-        if (z == NULL)
-            return NULL;
-        v_complement(z->long_value.ob_digit, a->long_value.ob_digit, size_a);
-        a = z;
-    }
-    else
-        /* Keep reference count consistent. */
-        Py_INCREF(a);
-
-    /* Same for b. */
     size_b = _PyLong_DigitCount(b);
+    nega = _PyLong_IsNegative(a);
     negb = _PyLong_IsNegative(b);
-    if (negb) {
-        z = long_alloc(size_b);
-        if (z == NULL) {
-            Py_DECREF(a);
-            return NULL;
-        }
-        v_complement(z->long_value.ob_digit, b->long_value.ob_digit, size_b);
-        b = z;
-    }
-    else
-        Py_INCREF(b);
 
     /* Swap a and b if necessary to ensure size_a >= size_b. */
     if (size_a < size_b) {
@@ -5673,46 +5771,24 @@ long_bitwise(PyLongObject *a,
        the final two's complement of z doesn't overflow. */
     z = long_alloc(size_z + negz);
     if (z == NULL) {
-        Py_DECREF(a);
-        Py_DECREF(b);
         return NULL;
     }
 
-    /* Compute digits for overlap of a and b. */
+    /* Work */
     switch(op) {
     case '&':
-        for (i = 0; i < size_b; ++i)
-            z->long_value.ob_digit[i] = a->long_value.ob_digit[i] & b->long_value.ob_digit[i];
+        BITWISE_OP_SIZE_GTE(&, z, a, b, size_z, size_a, size_b, negz, nega, negb);
         break;
     case '|':
-        for (i = 0; i < size_b; ++i)
-            z->long_value.ob_digit[i] = a->long_value.ob_digit[i] | b->long_value.ob_digit[i];
+        BITWISE_OP_SIZE_GTE(|, z, a, b, size_z, size_a, size_b, negz, nega, negb);
         break;
     case '^':
-        for (i = 0; i < size_b; ++i)
-            z->long_value.ob_digit[i] = a->long_value.ob_digit[i] ^ b->long_value.ob_digit[i];
+        BITWISE_OP_SIZE_GTE(^, z, a, b, size_z, size_a, size_b, negz, nega, negb);
         break;
     default:
         Py_UNREACHABLE();
     }
 
-    /* Copy any remaining digits of a, inverting if necessary. */
-    if (op == '^' && negb)
-        for (; i < size_z; ++i)
-            z->long_value.ob_digit[i] = a->long_value.ob_digit[i] ^ PyLong_MASK;
-    else if (i < size_z)
-        memcpy(&z->long_value.ob_digit[i], &a->long_value.ob_digit[i],
-               (size_z-i)*sizeof(digit));
-
-    /* Complement result if negative. */
-    if (negz) {
-        _PyLong_FlipSign(z);
-        z->long_value.ob_digit[size_z] = PyLong_MASK;
-        v_complement(z->long_value.ob_digit, z->long_value.ob_digit, size_z+1);
-    }
-
-    Py_DECREF(a);
-    Py_DECREF(b);
     return (PyObject *)maybe_small_long(long_normalize(z));
 }
 
